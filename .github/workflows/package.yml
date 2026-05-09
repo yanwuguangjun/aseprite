@@ -44,7 +44,7 @@ jobs:
       - name: Restore Skia cache
         uses: actions/cache@v4
         with:
-          path: .deps
+          path: skia
           key: skia-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('laf/misc/skia-tag.txt') }}
           restore-keys: |
             skia-${{ runner.os }}-${{ runner.arch }}-
@@ -56,9 +56,62 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Install Skia
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ runner.os }}" == "macOS" ]] ; then
+            skia_arch=arm64
+          else
+            skia_arch=x64
+          fi
+
+          if [[ -d "skia/out/Release-$skia_arch" ]] ; then
+            exit 0
+          fi
+
+          if [[ "${{ runner.os }}" == "Windows" ]] ; then
+            this_dir=$(cygpath "${{ github.workspace }}")
+          else
+            this_dir="${{ github.workspace }}"
+          fi
+
+          skia_url=$(bash "$this_dir/laf/misc/skia-url.sh" Release)
+          skia_file=$(basename "$skia_url")
+          curl --ssl-revoke-best-effort -L -o "$skia_file" "$skia_url"
+          rm -rf skia
+          unzip -q "$skia_file" -d skia
+
       - name: Build Aseprite
         shell: bash
-        run: bash build.sh --auto --norun
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ runner.os }}" == "Windows" ]] ; then
+            enable_ccache=off
+          else
+            enable_ccache=on
+          fi
+
+          if [[ "${{ runner.os }}" == "macOS" ]] ; then
+            skia_arch=arm64
+            osx_deployment_target=11.0
+          else
+            skia_arch=x64
+            osx_deployment_target=10.14
+          fi
+
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=$osx_deployment_target \
+            -DENABLE_TESTS=OFF \
+            -DENABLE_CCACHE=$enable_ccache \
+            -DLAF_BACKEND=skia \
+            -DSKIA_DIR=$(realpath skia) \
+            -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch)
+
+          cmake --build build --target aseprite
 
       - name: Package Unix build
         if: runner.os != 'Windows'
