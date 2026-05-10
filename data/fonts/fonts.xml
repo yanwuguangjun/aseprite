@@ -34,7 +34,7 @@
         type="spritesheet"
         descent="2"
         file="aseprite_font.png">
-    <fallback font="Unicode" size="12" />
+    <fallback font="Unicode" size="11" />
   </font>
 
   <font name="Aseprite Mini"
