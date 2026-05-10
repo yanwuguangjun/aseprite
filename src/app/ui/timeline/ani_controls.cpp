@@ -43,7 +43,6 @@ AniControls::AniControls(TooltipManager* tooltipManager) : ButtonSet(5)
   addItem(theme->parts.aniLast(), theme->styles.aniButton());
   ItemChange.connect([this] { onClickButton(); });
 
-  setTriggerOnMouseUp(true);
   setTransparent(true);
 
   for (int i = 0; i < ACTIONS; ++i)
