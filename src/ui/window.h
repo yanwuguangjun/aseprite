@@ -46,6 +46,7 @@ public:
   void setSizeable(bool state);
   void setOnTop(bool state);
   void setWantFocus(bool state);
+  void setCreateNativeWindow(bool state) { m_createNativeWindow = state; }
 
   void remapWindow();
   void centerWindow(Display* parentDisplay = nullptr);
@@ -77,7 +78,7 @@ public:
   // changed.
   bool isResizing() const { return m_isResizing; }
 
-  bool shouldCreateNativeWindow() const { return !isDesktop(); }
+  bool shouldCreateNativeWindow() const { return !isDesktop() && m_createNativeWindow; }
 
   HitTest hitTest(const gfx::Point& point);
 
@@ -132,6 +133,7 @@ private:
   ButtonBase* m_closeButton;
   bool m_ownDisplay : 1;
   bool m_isDesktop : 1;
+  bool m_createNativeWindow : 1;
   bool m_isMoveable : 1;
   bool m_isSizeable : 1;
   bool m_isOnTop : 1;
