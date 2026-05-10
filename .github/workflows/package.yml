@@ -113,6 +113,15 @@ jobs:
 
           cmake --build build --target aseprite
 
+      - name: Sign macOS app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          codesign --force --deep --sign - build/bin/Aseprite.app
+          codesign --verify --deep --strict --verbose=2 build/bin/Aseprite.app
+
       - name: Package Unix build
         if: runner.os != 'Windows'
         shell: bash
@@ -134,6 +143,22 @@ jobs:
 
           mkdir -p "$package_dir"
           cp -a build/bin/. "$package_dir/"
+
+          if [[ "$RUNNER_OS" == "macOS" ]] ; then
+            cat > "$package_dir/README-macOS.txt" <<'EOF'
+          This CI build is ad-hoc signed, but it is not notarized by Apple.
+
+          If macOS reports that Aseprite.app is damaged and cannot be opened, remove
+          the quarantine attribute after extracting the package:
+
+            xattr -dr com.apple.quarantine Aseprite.app
+            open Aseprite.app
+
+          For distribution without this warning, build with an Apple Developer ID
+          certificate and notarize the app.
+          EOF
+          fi
+
           tar -czf "$archive_path" -C "$RUNNER_TEMP" "$package_name"
 
           echo "PACKAGE_NAME=$package_name" >> "$GITHUB_ENV"
