@@ -620,6 +620,8 @@ void ComboBox::openListBox()
   m_window->setWantFocus(false);
   m_window->setSizeable(false);
   m_window->setMoveable(false);
+  if (display())
+    m_window->setParentDisplay(display());
 
   Widget* viewport = view->viewport();
   {
