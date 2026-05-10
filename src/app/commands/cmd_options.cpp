@@ -60,6 +60,8 @@
 
 #include "options.xml.h"
 
+#include <algorithm>
+
 namespace app {
 
 namespace {
@@ -502,6 +504,7 @@ public:
     });
     themeFont()->FontChange.connect([this] { updateFontPreviews(); });
     themeMiniFont()->FontChange.connect([this] { updateFontPreviews(); });
+    fallbackFontSize()->Change.connect([this] { updateFontPreviews(); });
 
     // Theme buttons
     themeList()->Change.connect([this] { onThemeChange(); });
@@ -744,6 +747,7 @@ public:
     useSelectionToolLoop()->setSelected(m_pref.experimental.useSelectionToolLoop());
     flashLayer()->setSelected(m_pref.experimental.flashLayer());
     nonactiveLayersOpacity()->setValue(m_pref.experimental.nonactiveLayersOpacity());
+    fallbackFontSize()->setTextf("%d", m_pref.theme.fallbackFontSize());
 
     m_rgbmapAlgorithmSelector.algorithm(m_pref.quantization.rgbmapAlgorithm());
     m_bestFitCriteriaSelector.criteria(m_pref.quantization.fitCriteria());
@@ -1038,6 +1042,12 @@ public:
         m_pref.theme.font(fontStr);
         m_pref.theme.miniFont(miniFontStr);
 
+        reset_theme = true;
+      }
+
+      const int fallbackSize = std::clamp(fallbackFontSize()->textInt(), 1, 64);
+      if (m_pref.theme.fallbackFontSize() != fallbackSize) {
+        m_pref.theme.fallbackFontSize(fallbackSize);
         reset_theme = true;
       }
     }

@@ -549,6 +549,9 @@
 
             <check id="custom_mini_font" text="@.mini_font" />
             <font id="theme_mini_font" cell_align="horizontal" />
+
+            <label text="@.fallback_font_size" for="fallback_font_size" />
+            <expr id="fallback_font_size" suffix="@.fallback_font_size_unit" />
           </grid>
           <separator text="@.available_themes" horizontal="true" />
           <view expansive="true" maxsize="true">
