@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2025  Igara Studio S.A.
+// Copyright (C) 2018-present  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -1621,6 +1621,7 @@ private:
     exportAnimationInSequenceAlert()->resetWithDefaultValue();
     overwriteFilesOnExportAlert()->resetWithDefaultValue();
     overwriteFilesOnExportSpriteSheetAlert()->resetWithDefaultValue();
+    deleteTilemapDeleteUnusedTilesetAlert()->resetWithDefaultValue();
     advancedModeAlert()->resetWithDefaultValue();
     invalidFgBgColorAlert()->resetWithDefaultValue();
     runScriptAlert()->resetWithDefaultValue();
@@ -2301,8 +2302,10 @@ private:
 
         const auto& property = std::static_pointer_cast<SearchTextProperty>(
           widget->getProperty(SearchTextProperty::Name));
-        const auto& text = property->text();
+        if (!property)
+          continue;
 
+        const auto& text = property->text();
         if (text.empty())
           continue;
 

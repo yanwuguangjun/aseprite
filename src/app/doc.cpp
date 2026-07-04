@@ -362,6 +362,12 @@ void Doc::notifySliceDuplicated(Slice* slice)
   notify_observers<DocEvent&>(&DocObserver::onSliceDuplicated, ev);
 }
 
+void Doc::notifyBeforeCommitTransaction()
+{
+  DocEvent ev(this);
+  notify_observers<DocEvent&>(&DocObserver::onBeforeCommitTransaction, ev);
+}
+
 bool Doc::isModified() const
 {
   return !m_undo->isInSavedStateOrSimilar();
@@ -622,6 +628,7 @@ Doc* Doc::duplicate(DuplicateType type) const
   std::unique_ptr<Doc> documentCopy(new Doc(spriteCopyPtr.get()));
   Sprite* spriteCopy = spriteCopyPtr.release();
 
+  spriteCopy->setUserData(sourceSprite->userData());
   spriteCopy->setTotalFrames(sourceSprite->totalFrames());
   spriteCopy->setTileManagementPlugin(sourceSprite->tileManagementPlugin());
 
