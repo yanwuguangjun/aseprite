@@ -12,9 +12,13 @@
 *.res
 .DS_Store
 .vs
-.vscode
+.vscode/*
+!.vscode/launch.json
 tests/_test*
 build
+build-wasm
 .build
 .deps
 CMakeSettings.json
+web/node_modules
+web/dist
