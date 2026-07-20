@@ -26,6 +26,7 @@
 #include "doc/algorithm/flip_type.h"
 #include "doc/frame.h"
 #include "doc/image_buffer.h"
+#include "doc/image_ref.h"
 #include "doc/selected_objects.h"
 #include "filters/tiled_mode.h"
 #include "gfx/fwd.h"
@@ -38,6 +39,8 @@
 #include "ui/pointer_type.h"
 #include "ui/timer.h"
 #include "ui/widget.h"
+
+#include <vector>
 
 #include <memory>
 #include <set>
@@ -245,7 +248,8 @@ public:
 
   void pasteImage(const Image* image,
                   const Mask* mask = nullptr,
-                  const gfx::Point* position = nullptr);
+                  const gfx::Point* position = nullptr,
+                  const std::vector<doc::ImageRef>* extraLayerImages = nullptr);
 
   void startSelectionTransformation(const gfx::Point& move, double angle);
   void startFlipTransformation(doc::algorithm::FlipType flipType);

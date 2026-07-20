@@ -42,12 +42,15 @@
 #include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/mask.h"
+#include "doc/object.h"
 #include "doc/sprite.h"
 #include "doc/util.h"
 #include "gfx/region.h"
 #include "render/render.h"
 
 #include <algorithm>
+#include <map>
+#include <utility>
 
 #if _DEBUG
   #define DUMP_INNER_CMDS() dumpInnerCmds()
@@ -334,9 +337,20 @@ void PixelsMovement::cutMask()
 {
   m_innerCmds.push_back(InnerCmd::MakeClear());
 
+  // Cache per-cel content before clearing so multi-cel transforms can
+  // still reproduce after the holes are cut.
+  if (editMultipleCels())
+    cacheOriginalImagesFromEditableCels();
+
   {
     ContextWriter writer(m_reader, 1000);
-    if (writer.cel()) {
+    if (editMultipleCels()) {
+      for (Cel* cel : getEditableCels()) {
+        if (cel)
+          clear_mask_from_cel(m_tx, cel, m_site.tilemapMode(), m_site.tilesetMode());
+      }
+    }
+    else if (writer.cel()) {
       clear_mask_from_cel(m_tx, writer.cel(), m_site.tilemapMode(), m_site.tilesetMode());
 
       // Do not trim here so we don't lost the information about all
@@ -350,6 +364,89 @@ void PixelsMovement::cutMask()
 void PixelsMovement::copyMask()
 {
   hideDocumentMask();
+}
+
+void PixelsMovement::assignOriginalImagesBySelectedLayers(const std::vector<doc::ImageRef>& images)
+{
+  m_celOriginalImages.clear();
+  if (images.empty())
+    return;
+
+  LayerList layers;
+  if (m_site.range().enabled()) {
+    for (Layer* layer : m_site.selectedLayers().toBrowsableLayerList()) {
+      if (layer && layer->isImage() && layer->canEditPixels())
+        layers.push_back(layer);
+    }
+  }
+  if (layers.empty() && m_site.layer() && m_site.layer()->isImage() &&
+      m_site.layer()->canEditPixels()) {
+    layers.push_back(m_site.layer());
+  }
+
+  const size_t n = std::min(images.size(), layers.size());
+  for (size_t i = 0; i < n; ++i) {
+    if (!images[i] || !layers[i])
+      continue;
+    m_celOriginalImages[{ layers[i]->id(), m_site.frame() }] = images[i];
+  }
+
+  // Keep the floating/active original image in sync with the active layer.
+  if (m_site.layer()) {
+    auto it = m_celOriginalImages.find({ m_site.layer()->id(), m_site.frame() });
+    if (it != m_celOriginalImages.end() && it->second)
+      m_originalImage.reset(Image::createCopy(it->second.get()));
+  }
+}
+
+void PixelsMovement::cacheOriginalImagesFromEditableCels()
+{
+  m_celOriginalImages.clear();
+  const bool newBlend = Preferences::instance().experimental.newBlend();
+
+  // Keep the already-captured active image.
+  if (m_site.layer() && m_originalImage) {
+    m_celOriginalImages[{ m_site.layer()->id(), m_site.frame() }] =
+      ImageRef(Image::createCopy(m_originalImage.get()));
+  }
+
+  for (Cel* cel : getEditableCels()) {
+    if (!cel || !cel->layer())
+      continue;
+
+    const CelImageKey key{ cel->layer()->id(), cel->frame() };
+    if (m_celOriginalImages.find(key) != m_celOriginalImages.end())
+      continue;
+
+    ImageRef img;
+    Site celSite = m_site;
+    celSite.layer(cel->layer());
+    celSite.frame(cel->frame());
+
+    if (cel->layer()->isTilemap() && m_site.tilemapMode() == TilemapMode::Tiles) {
+      img.reset(new_tilemap_from_mask(celSite, m_initialMask0.get()));
+    }
+    else {
+      img.reset(new_image_from_mask(*cel->layer(),
+                                    cel->frame(),
+                                    m_initialMask0.get(),
+                                    newBlend));
+    }
+    if (img)
+      m_celOriginalImages[key] = img;
+  }
+}
+
+doc::ImageRef PixelsMovement::takeCachedOriginalImageForCurrentSite()
+{
+  if (!m_site.layer())
+    return ImageRef(nullptr);
+
+  auto it = m_celOriginalImages.find({ m_site.layer()->id(), m_site.frame() });
+  if (it == m_celOriginalImages.end() || !it->second)
+    return ImageRef(nullptr);
+
+  return ImageRef(Image::createCopy(it->second.get()));
 }
 
 void PixelsMovement::catchImage(const gfx::PointF& pos, HandleType handle)
@@ -853,15 +950,54 @@ void PixelsMovement::stampImage(bool finalStamp)
 {
   ContextWriter writer(m_reader, 1000);
   Cel* currentCel = m_site.cel();
+  Layer* currentLayer = m_site.layer();
+  const frame_t currentFrame = m_site.frame();
 
-  CelList cels;
-  if (finalStamp) {
-    cels = getEditableCels();
+  struct StampDest {
+    Layer* layer = nullptr;
+    frame_t frame = 0;
+    Cel* cel = nullptr;
+  };
+  std::vector<StampDest> dests;
+
+  if (finalStamp && m_celOriginalImages.size() > 1) {
+    // Multi-layer paste / transform: stamp every layer that has a
+    // cached original image (active layer first).
+    auto addDest = [&](Layer* layer, frame_t frame, bool requireCache) {
+      if (!layer || !layer->isImage() || !layer->canEditPixels())
+        return;
+      if (requireCache &&
+          m_celOriginalImages.find({ layer->id(), frame }) == m_celOriginalImages.end())
+        return;
+      for (const StampDest& d : dests) {
+        if (d.layer == layer && d.frame == frame)
+          return;
+      }
+      dests.push_back({ layer, frame, layer->cel(frame) });
+    };
+
+    addDest(currentLayer, currentFrame, false);
+    if (m_site.range().enabled()) {
+      for (Layer* layer : m_site.selectedLayers().toBrowsableLayerList())
+        addDest(layer, currentFrame, true);
+    }
+    for (const auto& kv : m_celOriginalImages) {
+      Layer* layer = doc::get<Layer>(kv.first.first);
+      addDest(layer, kv.first.second, true);
+    }
+  }
+  else if (finalStamp) {
+    for (Cel* cel : getEditableCels()) {
+      if (cel)
+        dests.push_back({ cel->layer(), cel->frame(), cel });
+      else if (currentLayer)
+        dests.push_back({ currentLayer, currentFrame, nullptr });
+    }
   }
   // Current cel (m_site.cel()) can be nullptr when we paste in an
   // empty cel (Ctrl+V) and cut (Ctrl+X) the floating pixels.
   else {
-    cels.push_back(currentCel);
+    dests.push_back({ currentLayer, currentFrame, currentCel });
   }
 
   if (currentCel && currentCel->layer() && currentCel->layer()->isImage() &&
@@ -902,20 +1038,22 @@ void PixelsMovement::stampImage(bool finalStamp)
   const gfx::Size deltaB(currentAlignedBounds.x2() - initialAlignedBounds.x2(),
                          currentAlignedBounds.y2() - initialAlignedBounds.y2());
 
-  for (Cel* target : cels) {
+  for (const StampDest& dest : dests) {
+    const bool isActiveDest = (dest.layer == currentLayer && dest.frame == currentFrame &&
+                               dest.cel == currentCel);
+
     // We'll re-create the transformation for the other cels
-    if (target != currentCel) {
-      ASSERT(target);
-      m_site.layer(target->layer());
-      m_site.frame(target->frame());
-      ASSERT(m_site.cel() == target);
+    if (!isActiveDest) {
+      ASSERT(dest.layer);
+      m_site.layer(dest.layer);
+      m_site.frame(dest.frame);
       Grid targetGrid(m_site.grid());
       // Align masks and transformData before to 'reproduceAllTransformationsWithInnerCmds'
       // Note: this alignement is needed only when the editor is on 'TilemapMode::Tiles',
       // on the other hand 'TilemapMode::Pixels' do not require any additional
       // mask/transformData adjustments.
       if (originalSiteTilemapMode == TilemapMode::Tiles) {
-        if (target->layer()->isTilemap()) {
+        if (dest.layer->isTilemap()) {
           alignMasksAndTransformData(&initialMask0,
                                      &initialMask,
                                      &currentMask,
@@ -952,15 +1090,12 @@ void PixelsMovement::stampImage(bool finalStamp)
   m_initialData.bounds(initialData.bounds());
   m_currentData.bounds(currentData.bounds());
   m_site.tilesetMode(originalSiteTilesetMode);
-  currentCel = m_site.cel();
-  if (currentCel &&
-      (m_site.layer() != currentCel->layer() || m_site.frame() != currentCel->frame())) {
-    m_site.layer(currentCel->layer());
-    m_site.frame(currentCel->frame());
-    m_site.tilemapMode(originalSiteTilemapMode);
-    m_site.tilesetMode(originalSiteTilesetMode);
+  m_site.layer(currentLayer);
+  m_site.frame(currentFrame);
+  m_site.tilemapMode(originalSiteTilemapMode);
+  m_site.tilesetMode(originalSiteTilesetMode);
+  if (currentLayer)
     redrawExtraImage();
-  }
 }
 
 void PixelsMovement::stampExtraCelImage()
@@ -1553,18 +1688,27 @@ void PixelsMovement::reproduceAllTransformationsWithInnerCmds()
 
   m_document->setMask(m_initialMask0.get());
   m_initialMask->copyFrom(m_initialMask0.get());
-  if (m_site.layer()->isTilemap() && m_site.tilemapMode() == TilemapMode::Tiles) {
+
+  ImageRef cached = takeCachedOriginalImageForCurrentSite();
+  if (cached) {
+    m_originalImage = cached;
+  }
+  else if (m_site.layer()->isTilemap() && m_site.tilemapMode() == TilemapMode::Tiles) {
     m_originalImage.reset(new_tilemap_from_mask(m_site, m_initialMask.get()));
   }
-  else
+  else {
     m_originalImage.reset(new_image_from_mask(m_site,
                                               m_initialMask.get(),
                                               Preferences::instance().experimental.newBlend()));
+  }
 
   for (const InnerCmd& c : m_innerCmds) {
     switch (c.type) {
       case InnerCmd::Clear:
-        clear_mask_from_cel(m_tx, m_site.cel(), m_site.tilemapMode(), m_site.tilesetMode());
+        // Already cleared up-front for multi-cel cut, but still needed
+        // when reproducing after rollback (e.g. frame navigation).
+        if (m_site.cel())
+          clear_mask_from_cel(m_tx, m_site.cel(), m_site.tilemapMode(), m_site.tilesetMode());
         break;
       case InnerCmd::Flip: flipOriginalImage(c.data.flip.type); break;
       case InnerCmd::Shift:
