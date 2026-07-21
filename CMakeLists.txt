@@ -22,6 +22,11 @@ set(CMAKE_USER_MAKE_RULES_OVERRIDE_CXX ${CMAKE_CURRENT_SOURCE_DIR}/laf/cmake/cxx
 # Aseprite project
 project(aseprite C CXX)
 
+# WebAssembly / Emscripten target lives in a standalone project:
+#   emscripten/CMakeLists.txt  (build via ./emscripten/tools/build.sh)
+# Do not configure this top-level CMakeLists with emcmake; use the
+# dedicated emscripten/ entrypoint instead.
+
 # Check repository status
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/laf/CMakeLists.txt" OR
    NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/laf/clip/CMakeLists.txt")
