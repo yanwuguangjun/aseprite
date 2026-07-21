@@ -41,6 +41,23 @@ jobs:
             libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev \
             libfontconfig1-dev
 
+      - name: Set build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            echo "SKIA_ARCH=arm64" >> "$GITHUB_ENV"
+            echo "OSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
+          else
+            echo "SKIA_ARCH=x64" >> "$GITHUB_ENV"
+            echo "OSX_DEPLOYMENT_TARGET=10.14" >> "$GITHUB_ENV"
+          fi
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            echo "ENABLE_CCACHE=off" >> "$GITHUB_ENV"
+          else
+            echo "ENABLE_CCACHE=on" >> "$GITHUB_ENV"
+          fi
+
       - name: Restore Skia cache
         uses: actions/cache@v4
         with:
@@ -61,17 +78,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${{ runner.os }}" == "macOS" ]] ; then
-            skia_arch=arm64
-          else
-            skia_arch=x64
-          fi
-
-          if [[ -d "skia/out/Release-$skia_arch" ]] ; then
+          if [[ -d "skia/out/Release-$SKIA_ARCH" ]]; then
             exit 0
           fi
 
-          if [[ "${{ runner.os }}" == "Windows" ]] ; then
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
             this_dir=$(cygpath "${{ github.workspace }}")
           else
             this_dir="${{ github.workspace }}"
@@ -88,28 +99,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${{ runner.os }}" == "Windows" ]] ; then
-            enable_ccache=off
-          else
-            enable_ccache=on
-          fi
-
-          if [[ "${{ runner.os }}" == "macOS" ]] ; then
-            skia_arch=arm64
-            osx_deployment_target=11.0
-          else
-            skia_arch=x64
-            osx_deployment_target=10.14
-          fi
-
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=$osx_deployment_target \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$OSX_DEPLOYMENT_TARGET" \
             -DENABLE_TESTS=OFF \
-            -DENABLE_CCACHE=$enable_ccache \
+            -DENABLE_CCACHE="$ENABLE_CCACHE" \
             -DLAF_BACKEND=skia \
             -DSKIA_DIR=$(realpath skia) \
-            -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch)
+            -DSKIA_LIBRARY_DIR=$(realpath "skia/out/Release-$SKIA_ARCH")
 
           cmake --build build --target aseprite
 
@@ -118,12 +115,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           codesign --force --deep --sign - build/bin/Aseprite.app
           codesign --verify --deep --strict --verbose=2 build/bin/Aseprite.app
 
-      - name: Package Unix build
-        if: runner.os != 'Windows'
+      - name: Prepare package metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -138,54 +133,48 @@ jobs:
           os_name="$(printf '%s' "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')"
           arch_name="$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
           package_name="aseprite-${safe_ref}-${os_name}-${arch_name}"
-          package_dir="$RUNNER_TEMP/$package_name"
-          archive_path="$RUNNER_TEMP/$package_name.tar.gz"
-
-          mkdir -p "$package_dir"
-          cp -a build/bin/. "$package_dir/"
-
-          if [[ "$RUNNER_OS" == "macOS" ]] ; then
-            cat > "$package_dir/README-macOS.txt" <<'EOF'
-          This CI build is ad-hoc signed, but it is not notarized by Apple.
-
-          If macOS reports that Aseprite.app is damaged and cannot be opened, remove
-          the quarantine attribute after extracting the package:
-
-            xattr -dr com.apple.quarantine Aseprite.app
-            open Aseprite.app
-
-          For distribution without this warning, build with an Apple Developer ID
-          certificate and notarize the app.
-          EOF
-          fi
-
-          tar -czf "$archive_path" -C "$RUNNER_TEMP" "$package_name"
 
           echo "PACKAGE_NAME=$package_name" >> "$GITHUB_ENV"
-          echo "PACKAGE_PATH=$archive_path" >> "$GITHUB_ENV"
+          echo "PACKAGE_DIR=$RUNNER_TEMP/$package_name" >> "$GITHUB_ENV"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            echo "PACKAGE_PATH=$RUNNER_TEMP/$package_name.zip" >> "$GITHUB_ENV"
+          else
+            echo "PACKAGE_PATH=$RUNNER_TEMP/$package_name.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: Package Unix build
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$PACKAGE_DIR"
+          cp -a build/bin/. "$PACKAGE_DIR/"
+
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            printf '%s\n' \
+              'This CI build is ad-hoc signed, but it is not notarized by Apple.' \
+              '' \
+              'If macOS reports that Aseprite.app is damaged and cannot be opened, remove' \
+              'the quarantine attribute after extracting the package:' \
+              '' \
+              '  xattr -dr com.apple.quarantine Aseprite.app' \
+              '  open Aseprite.app' \
+              '' \
+              'For distribution without this warning, build with an Apple Developer ID' \
+              'certificate and notarize the app.' \
+              > "$PACKAGE_DIR/README-macOS.txt"
+          fi
+
+          tar -czf "$PACKAGE_PATH" -C "$RUNNER_TEMP" "$PACKAGE_NAME"
 
       - name: Package Windows build
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $shortSha = (git rev-parse --short HEAD).Trim()
-          $refName = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { $shortSha }
-          $safeRef = $refName -replace '[^A-Za-z0-9._-]', '-'
-          if ([string]::IsNullOrWhiteSpace($safeRef)) {
-            $safeRef = $shortSha
-          }
-
-          $archName = ($env:RUNNER_ARCH).ToLowerInvariant()
-          $packageName = "aseprite-$safeRef-windows-$archName"
-          $packageDir = Join-Path $env:RUNNER_TEMP $packageName
-          $archivePath = Join-Path $env:RUNNER_TEMP "$packageName.zip"
-
-          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
-          Copy-Item -Path "build/bin/*" -Destination $packageDir -Recurse -Force
-          Compress-Archive -Path "$packageDir/*" -DestinationPath $archivePath -Force
-
-          "PACKAGE_NAME=$packageName" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "PACKAGE_PATH=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          New-Item -ItemType Directory -Path $env:PACKAGE_DIR -Force | Out-Null
+          Copy-Item -Path "build/bin/*" -Destination $env:PACKAGE_DIR -Recurse -Force
+          Compress-Archive -Path "$env:PACKAGE_DIR/*" -DestinationPath $env:PACKAGE_PATH -Force
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
