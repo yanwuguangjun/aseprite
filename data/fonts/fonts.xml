@@ -34,14 +34,15 @@
         type="spritesheet"
         descent="2"
         file="aseprite_font.png">
-    <fallback font="Unicode" size="11" />
+    <!-- Keep CJK fallback close to the pixel font height; overridable in Preferences → Theme -->
+    <fallback font="Unicode" size="9" />
   </font>
 
   <font name="Aseprite Mini"
         type="spritesheet"
         descent="1"
         file="aseprite_mini.png">
-    <fallback font="Unicode" size="10" />
+    <fallback font="Unicode" size="8" />
   </font>
 
 </fonts>

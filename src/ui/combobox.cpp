@@ -620,11 +620,15 @@ void ComboBox::openListBox()
   m_window->setWantFocus(false);
   m_window->setSizeable(false);
   m_window->setMoveable(false);
-  // Keep the popup in the same display. Native child windows can lose
-  // focus/ordering on macOS, making the drop-down look like it never opened.
+  // Keep the popup in the same display as the ComboBox. Creating a native
+  // floating child window can lose focus/ordering (especially on macOS, and
+  // inside Preferences when "UI with separate windows" is enabled), which
+  // makes the drop-down look like it never opened.
   m_window->setCreateNativeWindow(false);
-  if (display())
-    m_window->setDisplay(display(), false);
+  if (Display* disp = display()) {
+    m_window->setParentDisplay(disp);
+    m_window->setDisplay(disp, false);
+  }
 
   Widget* viewport = view->viewport();
   {
@@ -636,10 +640,12 @@ void ComboBox::openListBox()
       if (!item->hasFlags(HIDDEN))
         size.h += item->sizeHint().h;
 
-    if (!get_multiple_displays()) {
-      const int maxVal = std::max(entryBounds.y, display()->size().h - entryBounds.y2()) -
+    // Clamp against the ComboBox display (works for both one-window and
+    // separate Preferences/native windows).
+    if (Display* disp = display()) {
+      const int maxVal = std::max(entryBounds.y, disp->size().h - entryBounds.y2()) -
                          8 * guiscale();
-      size.h = std::clamp(size.h, textHeight(), maxVal);
+      size.h = std::clamp(size.h, textHeight(), std::max(textHeight(), maxVal));
     }
 
     viewport->setMinSize(size);

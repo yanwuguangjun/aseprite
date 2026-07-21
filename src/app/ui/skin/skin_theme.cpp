@@ -351,8 +351,15 @@ static FontData* load_font(const XMLElement* xmlFont, const std::string& xmlFile
       const char* sizeStr = xmlFallback->Attribute("size");
       if (sizeStr)
         size = std::strtol(sizeStr, nullptr, 10);
-      if (result->name() == "Aseprite" && fallback->name() == "Unicode") {
-        size = std::clamp(Preferences::instance().theme.fallbackFontSize(), 1, 64);
+      // Pixel UI fonts use a spritesheet for Latin glyphs; CJK comes from the
+      // Unicode TTF fallback and must stay close to the pixel font height.
+      if (fallback->name() == "Unicode" &&
+          (result->name() == "Aseprite" || result->name() == "Aseprite Mini")) {
+        const int prefSize = Preferences::instance().theme.fallbackFontSize();
+        if (result->name() == "Aseprite Mini")
+          size = std::clamp(prefSize - 1, 1, 64);
+        else
+          size = std::clamp(prefSize, 1, 64);
       }
 
       result->setFallback(fallback, size);
