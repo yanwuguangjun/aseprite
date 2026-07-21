@@ -44,8 +44,10 @@
 #include "render/quantization.h"
 #include "view/cels.h"
 
+#include <algorithm>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 namespace app {
 
@@ -98,6 +100,12 @@ struct Clipboard::Data {
   // RGB/Grayscale/Indexed image
   ImageRef image;
 
+  // Per-layer masked images when copying a spatial selection across
+  // multiple selected layers (keeps layer structure). The primary
+  // "image" field is the active layer's content for native clipboard
+  // / single-image paste compatibility.
+  std::vector<ImageRef> images;
+
   // The palette of the image (or tileset) if it's indexed
   std::shared_ptr<Palette> palette;
 
@@ -132,6 +140,7 @@ struct Clipboard::Data {
   {
     text.clear();
     image.reset();
+    images.clear();
     palette.reset();
     tilemap.reset();
     tileset.reset();
@@ -143,7 +152,7 @@ struct Clipboard::Data {
 
   ClipboardFormat format() const
   {
-    if (image)
+    if (image || !images.empty())
       return ClipboardFormat::Image;
     else if (tilemap)
       return ClipboardFormat::Tilemap;
@@ -264,6 +273,7 @@ bool Clipboard::copyFromDocument(const Site& site, bool merged)
   const Doc* doc = static_cast<const Doc*>(site.document());
   const Mask* mask = doc->mask();
   const Palette* pal = doc->sprite()->palette(site.frame());
+  const bool newBlend = Preferences::instance().experimental.newBlend();
 
   if (!merged && site.layer() && site.layer()->isTilemap() &&
       site.tilemapMode() == TilemapMode::Tiles) {
@@ -284,8 +294,52 @@ bool Clipboard::copyFromDocument(const Site& site, bool merged)
     return true;
   }
 
-  Image* image =
-    new_image_from_mask(site, mask, Preferences::instance().experimental.newBlend(), merged);
+  // Cross-layer copy of the spatial selection: one masked image per
+  // selected editable layer on the current frame (keeps layer structure).
+  if (!merged && site.range().enabled() && mask && !mask->isEmpty()) {
+    LayerList layers;
+    for (Layer* layer : site.selectedLayers().toBrowsableLayerList()) {
+      if (layer && layer->isImage() && layer->canEditPixels())
+        layers.push_back(layer);
+    }
+
+    if (layers.size() > 1) {
+      std::vector<ImageRef> images;
+      ImageRef activeImage;
+      images.reserve(layers.size());
+
+      for (Layer* layer : layers) {
+        Image* layerImage = new_image_from_mask(*layer, site.frame(), mask, newBlend);
+        if (!layerImage)
+          continue;
+
+        ImageRef ref(layerImage);
+        images.push_back(ref);
+        if (layer == site.layer())
+          activeImage = ref;
+      }
+
+      if (images.empty())
+        return false;
+
+      if (!activeImage)
+        activeImage = images.front();
+
+      // Keep Image::createCopy so setData owns a distinct primary image
+      // while images[] retain their own refs for multi-layer paste.
+      setData(Image::createCopy(activeImage.get()),
+              (mask ? new Mask(*mask) : nullptr),
+              (pal ? new Palette(*pal) : nullptr),
+              nullptr,
+              nullptr,
+              true, // set native clipboard (single/active image only)
+              site.layer() && !site.layer()->isBackground());
+      m_data->images = std::move(images);
+      return true;
+    }
+  }
+
+  Image* image = new_image_from_mask(site, mask, newBlend, merged);
   if (!image)
     return false;
 
@@ -488,11 +542,18 @@ void Clipboard::paste(Context* ctx, const bool interactive, const gfx::Point* po
 
   switch (format()) {
     case ClipboardFormat::Image: {
+      // Preserve multi-layer images before getImage(), which may reload
+      // a single bitmap from the native clipboard and clear local data.
+      const std::vector<ImageRef> multiImages = m_data->images;
+
       // Get the image from the native clipboard.
       if (!getImage(nullptr))
         return;
 
       ASSERT(m_data->image);
+
+      if (multiImages.size() > 1)
+        m_data->images = multiImages;
 
       Palette* dst_palette = dstSpr->palette(site.frame());
 
@@ -519,14 +580,117 @@ void Clipboard::paste(Context* ctx, const bool interactive, const gfx::Point* po
                                                      0));
       }
 
+      // Convert extra per-layer images to destination pixel format if needed.
+      std::vector<ImageRef> pasteImages;
+      if (m_data->images.size() > 1) {
+        pasteImages.reserve(m_data->images.size());
+        for (const ImageRef& img : m_data->images) {
+          if (!img) {
+            pasteImages.push_back(nullptr);
+            continue;
+          }
+          if (img->pixelFormat() == dstSpr->pixelFormat() &&
+              (img->pixelFormat() != IMAGE_INDEXED ||
+               (m_data->palette && m_data->palette->countDiff(dst_palette, NULL, NULL) == 0))) {
+            pasteImages.push_back(img);
+          }
+          else {
+            RgbMap* dst_rgbmap = dstSpr->rgbMap(site.frame());
+            pasteImages.emplace_back(render::convert_pixel_format(img.get(),
+                                                                  NULL,
+                                                                  dstSpr->pixelFormat(),
+                                                                  render::Dithering(),
+                                                                  dst_rgbmap,
+                                                                  m_data->palette.get(),
+                                                                  false,
+                                                                  0));
+          }
+        }
+      }
+
       if (editor && interactive) {
-        // TODO we don't support pasting in multiple cels at the
-        //      moment, so we clear the range here (same as in
-        //      PasteTextCommand::onExecute())
-        App::instance()->timeline()->clearAndInvalidateRange();
+        // Keep the timeline range when pasting multi-layer selection
+        // content so each image can be stamped onto the matching layer.
+        if (pasteImages.size() <= 1)
+          App::instance()->timeline()->clearAndInvalidateRange();
 
         // Change to MovingPixelsState
-        editor->pasteImage(src_image.get(), m_data->mask.get(), position);
+        editor->pasteImage(src_image.get(),
+                           m_data->mask.get(),
+                           position,
+                           pasteImages.size() > 1 ? &pasteImages : nullptr);
+      }
+      else if (pasteImages.size() > 1) {
+        // Non-interactive multi-layer paste: stamp each image onto the
+        // corresponding selected editable layer with the same origin.
+        LayerList layers;
+        for (Layer* layer : site.selectedLayers().toBrowsableLayerList()) {
+          if (layer && layer->isImage() && layer->canEditPixels())
+            layers.push_back(layer);
+        }
+        if (layers.empty() && site.layer() && site.layer()->isImage() &&
+            site.layer()->canEditPixels()) {
+          layers.push_back(site.layer());
+        }
+
+        const gfx::Point origin =
+          position ? *position : (m_data->mask ? m_data->mask->origin() : gfx::Point());
+
+        ContextWriter writer(ctx);
+        Tx tx(writer, "Paste Image");
+        DocApi api = dstDoc->getApi(tx);
+        const size_t n = std::min(pasteImages.size(), layers.size());
+        for (size_t i = 0; i < n; ++i) {
+          ImageRef layerImage = pasteImages[i];
+          Layer* dstLayer = layers[i];
+          if (!layerImage || !dstLayer || layerImage->pixelFormat() != dstSpr->pixelFormat())
+            continue;
+
+          ImageRef result(Image::createCopy(layerImage.get()));
+          gfx::Rect resultBounds(origin, result->size());
+          Cel* existing = dstLayer->cel(site.frame());
+          if (existing && existing->image()) {
+            resultBounds = existing->bounds().createUnion(resultBounds);
+            ImageRef blended(
+              Image::create(dstSpr->pixelFormat(), resultBounds.w, resultBounds.h));
+            clear_image(blended.get(), blended->maskColor());
+            doc::blend_image(
+              blended.get(),
+              existing->image(),
+              gfx::Clip(existing->bounds().origin() - resultBounds.origin(),
+                        existing->image()->bounds()),
+              site.palette(),
+              255,
+              BlendMode::NORMAL);
+            doc::blend_image(blended.get(),
+                             layerImage.get(),
+                             gfx::Clip(origin - resultBounds.origin(), layerImage->bounds()),
+                             site.palette(),
+                             255,
+                             BlendMode::NORMAL);
+            result = blended;
+            api.clearCel(existing);
+          }
+
+          const gfx::Point startOrigin(resultBounds.origin());
+          gfx::Rect shrinkBounds;
+          doc::algorithm::shrink_bounds(result.get(),
+                                        result->maskColor(),
+                                        dstLayer,
+                                        gfx::Rect(gfx::Point(), result->size()),
+                                        shrinkBounds);
+          result.reset(crop_image(result.get(), shrinkBounds, result->maskColor()));
+          resultBounds = gfx::Rect(startOrigin.x + shrinkBounds.x,
+                                   startOrigin.y + shrinkBounds.y,
+                                   result->width(),
+                                   result->height());
+
+          Cel* dstCel = api.addCel(static_cast<LayerImage*>(dstLayer), site.frame(), result);
+          if (dstCel)
+            dstCel->setBounds(resultBounds);
+        }
+        tx.commit();
+        updateDstDoc = true;
       }
       else {
         // CLI version:

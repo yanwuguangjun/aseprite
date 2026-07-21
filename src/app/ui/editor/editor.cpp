@@ -2850,7 +2850,10 @@ void Editor::setZoomAndCenterInMouse(const Zoom& zoom,
   }
 }
 
-void Editor::pasteImage(const Image* image, const Mask* mask, const gfx::Point* position)
+void Editor::pasteImage(const Image* image,
+                        const Mask* mask,
+                        const gfx::Point* position,
+                        const std::vector<doc::ImageRef>* extraLayerImages)
 {
   ASSERT(image);
 
@@ -2941,6 +2944,9 @@ void Editor::pasteImage(const Image* image, const Mask* mask, const gfx::Point* 
 
   PixelsMovementPtr pixelsMovement(
     new PixelsMovement(UIContext::instance(), site, image, &mask2, "Paste", &m_tiledModeHelper));
+
+  if (extraLayerImages && extraLayerImages->size() > 1)
+    pixelsMovement->assignOriginalImagesBySelectedLayers(*extraLayerImages);
 
   setState(EditorStatePtr(new MovingPixelsState(this, NULL, pixelsMovement, NoHandle)));
 }

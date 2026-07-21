@@ -18,10 +18,14 @@
 #include "doc/algorithm/flip_type.h"
 #include "doc/frame.h"
 #include "doc/image_ref.h"
+#include "doc/object.h"
 #include "gfx/size.h"
 #include "obs/connection.h"
 
+#include <map>
 #include <memory>
+#include <utility>
+#include <vector>
 
 namespace doc {
 class Image;
@@ -92,6 +96,10 @@ public:
   void copyMask();
   void catchImage(const gfx::PointF& pos, HandleType handle);
   void catchImageAgain(const gfx::PointF& pos, HandleType handle);
+
+  // Assign per-layer original images (e.g. multi-layer paste). Images are
+  // mapped in order to selected editable layers on the current frame.
+  void assignOriginalImagesBySelectedLayers(const std::vector<doc::ImageRef>& images);
 
   // Moves the image to the new position (relative to the start
   // position given in the ctor).
@@ -165,6 +173,8 @@ private:
   void shiftOriginalImage(const int dx, const int dy, const double angle);
   CelList getEditableCels();
   void reproduceAllTransformationsWithInnerCmds();
+  void cacheOriginalImagesFromEditableCels();
+  doc::ImageRef takeCachedOriginalImageForCurrentSite();
 
   void alignMasksAndTransformData(const Mask* initialMask0,
                                   const Mask* initialMask,
@@ -236,6 +246,12 @@ private:
     static InnerCmd MakeStamp(const Transformation& t);
   };
   std::vector<InnerCmd> m_innerCmds;
+
+  // Cached original masked content per layer+frame. Used when editing
+  // multiple cels so we can clear all targets up front and still
+  // reproduce the transformation, and for multi-layer paste.
+  using CelImageKey = std::pair<doc::ObjectId, doc::frame_t>;
+  std::map<CelImageKey, doc::ImageRef> m_celOriginalImages;
 };
 
 inline PixelsMovement::MoveModifier& operator|=(PixelsMovement::MoveModifier& a,
