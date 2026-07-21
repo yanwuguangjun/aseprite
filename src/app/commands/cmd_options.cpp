@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2025  Igara Studio S.A.
+// Copyright (C) 2018-present  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -59,6 +59,8 @@
 #endif
 
 #include "options.xml.h"
+
+#include <algorithm>
 
 namespace app {
 
@@ -502,6 +504,7 @@ public:
     });
     themeFont()->FontChange.connect([this] { updateFontPreviews(); });
     themeMiniFont()->FontChange.connect([this] { updateFontPreviews(); });
+    fallbackFontSize()->Change.connect([this] { updateFontPreviews(); });
 
     // Theme buttons
     themeList()->Change.connect([this] { onThemeChange(); });
@@ -744,6 +747,7 @@ public:
     useSelectionToolLoop()->setSelected(m_pref.experimental.useSelectionToolLoop());
     flashLayer()->setSelected(m_pref.experimental.flashLayer());
     nonactiveLayersOpacity()->setValue(m_pref.experimental.nonactiveLayersOpacity());
+    fallbackFontSize()->setTextf("%d", m_pref.theme.fallbackFontSize());
 
     m_rgbmapAlgorithmSelector.algorithm(m_pref.quantization.rgbmapAlgorithm());
     m_bestFitCriteriaSelector.criteria(m_pref.quantization.fitCriteria());
@@ -1038,6 +1042,12 @@ public:
         m_pref.theme.font(fontStr);
         m_pref.theme.miniFont(miniFontStr);
 
+        reset_theme = true;
+      }
+
+      const int fallbackSize = std::clamp(fallbackFontSize()->textInt(), 1, 64);
+      if (m_pref.theme.fallbackFontSize() != fallbackSize) {
+        m_pref.theme.fallbackFontSize(fallbackSize);
         reset_theme = true;
       }
     }
@@ -1611,6 +1621,7 @@ private:
     exportAnimationInSequenceAlert()->resetWithDefaultValue();
     overwriteFilesOnExportAlert()->resetWithDefaultValue();
     overwriteFilesOnExportSpriteSheetAlert()->resetWithDefaultValue();
+    deleteTilemapDeleteUnusedTilesetAlert()->resetWithDefaultValue();
     advancedModeAlert()->resetWithDefaultValue();
     invalidFgBgColorAlert()->resetWithDefaultValue();
     runScriptAlert()->resetWithDefaultValue();
@@ -2291,8 +2302,10 @@ private:
 
         const auto& property = std::static_pointer_cast<SearchTextProperty>(
           widget->getProperty(SearchTextProperty::Name));
-        const auto& text = property->text();
+        if (!property)
+          continue;
 
+        const auto& text = property->text();
         if (text.empty())
           continue;
 

@@ -351,6 +351,9 @@ static FontData* load_font(const XMLElement* xmlFont, const std::string& xmlFile
       const char* sizeStr = xmlFallback->Attribute("size");
       if (sizeStr)
         size = std::strtol(sizeStr, nullptr, 10);
+      if (result->name() == "Aseprite" && fallback->name() == "Unicode") {
+        size = std::clamp(Preferences::instance().theme.fallbackFontSize(), 1, 64);
+      }
 
       result->setFallback(fallback, size);
     }

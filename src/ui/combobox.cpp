@@ -620,6 +620,11 @@ void ComboBox::openListBox()
   m_window->setWantFocus(false);
   m_window->setSizeable(false);
   m_window->setMoveable(false);
+  // Keep the popup in the same display. Native child windows can lose
+  // focus/ordering on macOS, making the drop-down look like it never opened.
+  m_window->setCreateNativeWindow(false);
+  if (display())
+    m_window->setDisplay(display(), false);
 
   Widget* viewport = view->viewport();
   {
