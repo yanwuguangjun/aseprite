@@ -239,7 +239,7 @@
       <option id="selected" type="std::string" default="&quot;default&quot;" />
       <option id="font" type="std::string" />
       <option id="mini_font" type="std::string" />
-      <option id="fallback_font_size" type="int" default="11" />
+      <option id="fallback_font_size" type="int" default="9" />
     </section>
     <section id="tablet" text="Tablet">
       <option id="api" type="std::string" />

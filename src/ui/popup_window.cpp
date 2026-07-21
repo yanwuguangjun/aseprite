@@ -32,6 +32,9 @@ PopupWindow::PopupWindow(const std::string& text,
   setMoveable(false);
   setWantFocus(false);
   setAlign(LEFT | TOP);
+  // Prefer embedding in the parent UI display. Native floating popups can
+  // fail to stay ordered/focused on macOS (looks like the menu never opens).
+  setCreateNativeWindow(false);
 
   if (!withCloseButton) {
     // Remove close button
